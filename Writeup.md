@@ -1,150 +1,71 @@
-# Practical-Machine-Learning
-Building Predictive Model For Determining Fitness Exercise Correctness
-Practical Machine Learning Assignment Writeup
+Introduction
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
 
-Abstract
+Data
+Load the data (and packages) and replace missing variables and #DIV/0 with NA
 
-In this assignment, I build a predictive model to determine whether a particular form of exercise (barbell lifting) is performed correctly, using accelerometer data. The data set used is originally from [1].
+require("RCurl")
+require("caret")
 
-Data Retrieval
+url1 <- getURL("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+training <- read.csv(text=url1,na.strings=c("NA","#DIV/0!", "") )
 
-The dataset from [1] can be downloaded as follows:
+url2 <- getURL("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+testing <- read.csv(text=url2,na.strings=c("NA","#DIV/0!", "") )
+Pre-processing
+We want to remove some of this data, as it has no predictive role:
 
-if (! file.exists('./pml-training.csv')) {
-    download.file('http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv', destfile = './pml-training.csv')
-}
-if (! file.exists('./pml-testing.csv')) {
-    download.file('http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv', destfile = './pml-testing.csv')
-}
-The data is in standard CSV format and can be loaded into R using the usual facilities for working with CSV data:
+varToRemove <- names(training) %in% c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2","cvtd_timestamp", "new_window", "new_window", "num_window")
 
-pml.training <- read.csv('./pml-training.csv')
-pml.testing <- read.csv('./pml-testing.csv')
-Exploratory Analysis
+training <- training[!varToRemove]
+Let's also remove columns from the training set where there is too much missing data (say 80%+)
 
-The training set consists of 19622 observations of 160 variables, one of which is the dependent variable as far as this study is concerned:
+training <- training[colSums(!is.na(training))> nrow(training)*0.2]
+That leaves us with 53 variables, including the 'classe' variable that we will be predicting Now, let's also exclude highly correlated varibles (see Jason Brownlee's blog on that here: http://machinelearningmastery.com/feature-selection-with-the-caret-r-package/)
 
-dim(pml.training)
-Inspection of the data set indicates that many of the 159 predictors are missing in most of the observations:
+library(caret) # Model package
+correlationMatrix <- cor(training[, 1:52])
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.75)
+training <- training[-c(highlyCorrelated)]
+To identify the best model, we will build a couple of different once that we have come across during this coursera course: Tree based classification; Bagging; Random Forest, Support Vector Machine. First, however, we will create a hold-out sample, consisting of 30% of the training set.
 
-sum(complete.cases(pml.training))
-head(pml.training)
-Choosing between discarding most of the observations but using more predictors and discarding some predictors to keep most of the observations is easy: more observations are always a good thing, while additional variables may or may not be helpful.
+set.seed(100)
+trainIndex <- createDataPartition(training$classe, p=.7, list=FALSE)
+training <- training[trainIndex,]
+holdout <- training[-trainIndex,]
+Model build
+We are going to use the trainControl option to speed up computation of the models
 
-Additionally, it's worth noting that some of the variables in the data set do not come from accelerometer measurements and record experimental setup or participants' data. Treating those as potential confounders is a sane thing to do, so in addition to predictors with missing data, I also discarded the following variables: X, user_name, raw_timestamp_part1, raw_timestamp_part2, cvtd_timestamp, new_window and num_window.
+tc <- trainControl( method = "cv", repeats = 5)
+library(e1071) # Needed for rpart/tree model
+library(ipred) # Needed for bagging
+library(gbm) # Needed for boosting
+library(randomForest) # Needed for Random Forest
 
-include.cols <- c('roll_belt', 'pitch_belt', 'yaw_belt', 'total_accel_belt',
-                  'gyros_belt_x', 'gyros_belt_y', 'gyros_belt_z',
-                  'accel_belt_x', 'accel_belt_y', 'accel_belt_z',
-                  'magnet_belt_x', 'magnet_belt_y', 'magnet_belt_z',
-                  'roll_arm', 'pitch_arm', 'yaw_arm', 'total_accel_arm',
-                  'gyros_arm_x', 'gyros_arm_y', 'gyros_arm_z',
-                  'accel_arm_x', 'accel_arm_y', 'accel_arm_z',
-                  'magnet_arm_x', 'magnet_arm_y', 'magnet_arm_z',
-                  'roll_dumbbell', 'pitch_dumbbell', 'yaw_dumbbell', 'total_accel_dumbbell',
-                  'gyros_dumbbell_x', 'gyros_dumbbell_y', 'gyros_dumbbell_z',
-                  'accel_dumbbell_x', 'accel_dumbbell_y', 'accel_dumbbell_z',
-                  'magnet_dumbbell_x', 'magnet_dumbbell_y', 'magnet_dumbbell_z',
-                  'roll_forearm', 'pitch_forearm', 'yaw_forearm', 'total_accel_forearm',
-                  'gyros_forearm_x', 'gyros_forearm_y', 'gyros_forearm_z',
-                  'accel_forearm_x', 'accel_forearm_y', 'accel_forearm_z',
-                  'magnet_forearm_x', 'magnet_forearm_y', 'magnet_forearm_z'
-                  )
-proc.pml.testing <- pml.testing[, include.cols]
-include.cols <- c(include.cols, 'classe')
-proc.pml.training <- pml.training[, include.cols]
-Performing this transformation results in a data set of 19622 observations of 53 variables (one of which is the dependent variable "classe").
+set.seed(100)
+treeModel <- train(classe ~., method="rpart", trControl=tc, data=training)
+bagModel <-train(classe ~.,method="treebag", trControl=tc, data=training) 
+boostModel <- train(classe ~., method="gbm", trControl=tc, verbose=FALSE, data=training)
+rfModel <- train(classe ~., method="rf", trControl=tc, data=training) 
+Now, let's have a look at the confusionMatrix's outputs to se what model is predicting best on the training sample
 
-dim(proc.pml.training)
-sum(complete.cases(proc.pml.training))
-Now that I've cleaned up the data set, it would make sense to explore associations in the data.
+confusionMatrix(training$classe, predict(treeModel,training))$overall
+confusionMatrix(training$classe, predict(bagModel,training))$overall
+confusionMatrix(training$classe, predict(boostModel,training))$overall
+confusionMatrix(training$classe, predict(rfModel,training))$overall
+Model validation
+Let's now validate them on the hold-out sample (e.g. data frame = "testing")
 
-pred.corr <- cor(proc.pml.training[, names(proc.pml.training) != 'classe'])
-pal <- colorRampPalette(c('blue', 'white', 'red'))(n = 199)
-heatmap(pred.corr, col = pal)
-As can be seen from the heat map of the correlation matrix, most of predictors do not exhibit high degree of correlation. Nonetheless, there are a few pairs of variables that are highly correlated:
+confusionMatrix(holdout$classe, predict(treeModel,holdout))$overall
+confusionMatrix(holdout$classe, predict(bagModel,holdout))$overall
+confusionMatrix(holdout$classe, predict(boostModel,holdout))$overall
+confusionMatrix(holdout$classe, predict(rfModel,holdout))$overall
+So the best model is 'rfModel', which was built using Random Forest. The bagging approach also yielded a very good model. For rfModel the in sample error (1-Accuracy) 0%, and the out of sample error was also 0%. We can further see that the model is correctly predicting all 'classe' classifications by showing the full confusionMatrix for both the training and hold-out sample.
 
-pred.corr[(pred.corr < -0.8 | pred.corr > 0.8) & pred.corr != 1]
-There are nineteen variable pairs the Pearson correlation coefficient for which is above an arbitrary cutoff of 0.8 (in absolute value). To avoid throwing out the baby with the bath water, I chose an even more arbitrary cutoff of 0.98, and found that there are two pairs of variables that lie above this threshold.
+confusionMatrix(training$classe, predict(rfModel,training))
+confusionMatrix(holdout$classe, predict(rfModel,holdout))
+Quiz answers
+Finally, we can score the 'testing' set which is needed for the quiz
 
-which(pred.corr > 0.98 & pred.corr != 1)
-pred.corr[which(pred.corr > 0.98 & pred.corr != 1)]
-which(pred.corr < -0.98)
-pred.corr[which(pred.corr < -0.98)]
-Interestingly, the roll_belt predictor participates in both of these pairwise interactions:
-
-pred.corr['roll_belt', 'total_accel_belt']
-pred.corr['roll_belt', 'accel_belt_z']
-pred.corr['total_accel_belt', 'accel_belt_z']
-In view of this data, it seemed prudent to discard at least the roll_belt variable to prevent excessive bias in the model.
-
-include.cols <- c('pitch_belt', 'yaw_belt', 'total_accel_belt',
-                  'gyros_belt_x', 'gyros_belt_y', 'gyros_belt_z',
-                  'accel_belt_x', 'accel_belt_y', 'accel_belt_z',
-                  'magnet_belt_x', 'magnet_belt_y', 'magnet_belt_z',
-                  'roll_arm', 'pitch_arm', 'yaw_arm', 'total_accel_arm',
-                  'gyros_arm_x', 'gyros_arm_y', 'gyros_arm_z',
-                  'accel_arm_x', 'accel_arm_y', 'accel_arm_z',
-                  'magnet_arm_x', 'magnet_arm_y', 'magnet_arm_z',
-                  'roll_dumbbell', 'pitch_dumbbell', 'yaw_dumbbell', 'total_accel_dumbbell',
-                  'gyros_dumbbell_x', 'gyros_dumbbell_y', 'gyros_dumbbell_z',
-                  'accel_dumbbell_x', 'accel_dumbbell_y', 'accel_dumbbell_z',
-                  'magnet_dumbbell_x', 'magnet_dumbbell_y', 'magnet_dumbbell_z',
-                  'roll_forearm', 'pitch_forearm', 'yaw_forearm', 'total_accel_forearm',
-                  'gyros_forearm_x', 'gyros_forearm_y', 'gyros_forearm_z',
-                  'accel_forearm_x', 'accel_forearm_y', 'accel_forearm_z',
-                  'magnet_forearm_x', 'magnet_forearm_y', 'magnet_forearm_z'
-                  )
-proc.pml.testing <- pml.testing[, include.cols]
-include.cols <- c(include.cols, 'classe')
-proc.pml.training <- pml.training[, include.cols]
-Its worth noting that this analysis only explores pairwise, linear associations between variables. Looking for more general interactions is not computationally feasible without expert insight into the problem domain.
-
-Predictive Model
-
-For my initial attempt at building a predictive model I chose the random forest algorithm [2]. Random forests have several nice theoretical properties:
-
-They deal naturally with non-linearity, and assuming linearity in this case would be imprudent.
-
-There's no parameter selection involved. While random forest may overfit a given data set, just as any other machine learning algorithm, it has been shown by Breiman that classifier variance does not grow with the number of trees used (unlike with Adaboosted decision trees, for example). Therefore, it's always better to use more trees, memory and computational power allowing.
-
-The algorithm allows for good in-training estimates of variable importance and generalization error [2], which largely eliminates the need for a separate validation stage, though obtaining a proper generalization error estimate on a testing set would still be prudent.
-
-The algorithm is generally robust to outliers and correlated covariates [2], which seems like a nice property to have when there are known interactions between variables and no data on presence of outliers in the data set.
-
-Given that the problem at hand is a high-dimensional classification problem with number of observations much exceeding the number of predictors, random forest seems like a sound choice.
-
-library(randomForest)
-library(caret)
-library(grDevices)
-I'll set a fixed RNG seed to ensure reproducibility of my results (the random forest classifier training being non-deterministic).
-
-set.seed(50351)
-Let's train a classifier using all of our independent variables and 2048 trees.
-
-model <- randomForest(classe ~ ., data = proc.pml.training, ntree = 2048)
-model
-The out-of-bag error tends to exceed the generalization error [2], so the figure of 0.29% seems very promising.
-
-model$confusion
-The confusion matrix also looks good, indicating that the model fit the training set well. It may also be instructive to look at the variable importance estimates obtained by the classifier training algorithm.
-
-imp <- varImp(model)
-imp$Variable <- row.names(imp)
-imp[order(imp$Overall, decreasing = T),]
-Only five variables have importance measure more than ten times lower than the most important variable (yaw_belt), which seems to indicate the algorithm employed made good use of provided predictors.
-
-The following command can be used to obtain model's prediction for the assigned testing data set (output concealed intentially):
-
-predict(model, proc.pml.testing)
-The model achieves the perfect 100% accuracy on the limited "testing set" provided by the course staff.
-
-Conclusion
-
-Given that the model obtained using the initial approach appears to be highly successful by all available measures, further exploration of the matter does not seem to be necessary.
-
-References
-
-Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science., pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6.
-
-Breiman, L. (2001). Random forests. Machine learning, 45(1), 5-32.
+answers_for_quiz <- predict(rfModel, testing)
+as.vector(answers_for_quiz)
